@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>I Spy</title><link rel="stylesheet" href="style.css">
+<style>
+  #pile{display:block;width:100%;max-width:900px;aspect-ratio:3/2;margin:0 auto;border:1px solid var(--line);border-radius:8px;background:radial-gradient(#3b3126,#1e1812);cursor:grab;touch-action:none}
+  #pile.dig{cursor:grabbing}
+</style></head>
+<body>
+<main>
+  <div class="box">
+    <h3>I spy with my little eye…</h3>
+    <div class="body">
+      <div class="words marker" id="list"></div>
+      <div class="toast" id="toast" style="text-align:center">Press and drag to dig through the pile. Click an item to select it.</div>
+      <canvas id="pile"></canvas>
+      <p style="text-align:center;margin-top:16px"><button class="btn" id="reset">Re-pile</button></p>
+    </div>
+  </div>
+</main>
+<script src="common.js"></script>
+<script>
+// Every item is on the list, but items with absent:true are NOT in the pile (on purpose).
+const TARGETS = [
+  {id:'duck',   e:'🦆', label:'a rubber duck'},
+  {id:'key',    e:'🔑', label:'a key'},
+  {id:'sock',   e:'🧦', label:'a lonely sock',    absent:true},
+  {id:'pizza',  e:'🍕', label:'a slice of pizza', absent:true},
+  {id:'glasses',e:'👓', label:'reading glasses'},
+  {id:'cat',    e:'🐈', label:'a suspicious cat'},
+  {id:'banana', e:'🍌', label:'a banana',         absent:true},
+];
+// Look-alike decoys are similar in shape/color but never the same kind of thing as a target (no other keys, cats or glasses). Targets' exact emoji are filtered out below.
+const LOOKALIKES = ['🐤','🐥','🦢','🦜','🐓','🔒','🪝','🔨','🔍','🔎','🔭','🐕','🐇','🦊','🐀','🧤','🧣','🥖','🍋','🌽','🥪','🧀'];
+const CLUTTER = ['📚','🖊️','📎','☕','🪴','💡','📦','🎒','🧢','🥔','🔧','📌','🧃','🕹️','🧸','🍎','📐','🪥','🎲','🧲','📓','✂️','🔋','🧴','🎧','📱','⌚','🪙','🧩','🥄'];
+const ban = new Set(TARGETS.map(t=>t.e));
+
+const W=900, H=600, SIZE=54;
+const cv=document.getElementById('pile'), ctx=cv.getContext('2d');
+const dpr=Math.min(2,window.devicePixelRatio||1);
+cv.width=W*dpr; cv.height=H*dpr;
+const $=id=>document.getElementById(id);
+const rnd=(a,b)=>a+Math.random()*(b-a);
+const shuffle=a=>{for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;};
+
+let items=[], found=new Set();
+function build(){
+  found=new Set(); $('toast').textContent='Press and drag to dig through the pile. Click an item to select it.';
+  $('list').innerHTML=TARGETS.map(t=>`<span data-id="${t.id}">${t.label}</span>`).join('');
+  // jittered hex grid covering the whole area
+  const pos=[], dx=50, dy=44;
+  for(let r=0,y=24;y<H+10;y+=dy,r++) for(let x=(r%2?dx/2:0)+24;x<W+10;x+=dx) pos.push([x+rnd(-8,8),y+rnd(-8,8)]);
+  shuffle(pos);
+  const real=TARGETS.filter(t=>!t.absent);
+  const pool=[...LOOKALIKES,...LOOKALIKES,...CLUTTER].filter(e=>!ban.has(e));
+  items=pos.map(([x,y],i)=>{
+    const t=i<real.length?real[i]:null;
+    return {x,y,vx:0,vy:0,e:t?t.e:pool[Math.floor(Math.random()*pool.length)],id:t?t.id:null,
+            s:rnd(.9,1.15),rot:rnd(-.6,.6),found:false};
+  });
+  shuffle(items);
+  for(let i=0;i<80;i++) physics(true); // settle into a pile
+}
+function physics(settle){
+  const R=SIZE*.46;
+  for(const it of items){
+    it.vx*=settle?.5:.7; it.vy*=settle?.5:.7;
+    const sp=Math.hypot(it.vx,it.vy); if(sp>48){it.vx*=48/sp;it.vy*=48/sp;}
+    it.x+=it.vx; it.y+=it.vy;
+    if(it.x<R){it.x=R;it.vx*=-.3;} if(it.x>W-R){it.x=W-R;it.vx*=-.3;}
+    if(it.y<R){it.y=R;it.vy*=-.3;} if(it.y>H-R){it.y=H-R;it.vy*=-.3;}
+  }
+  const md=R*1.7;
+  for(let i=0;i<items.length;i++){
+    const a=items[i];
+    for(let j=i+1;j<items.length;j++){
+      const b=items[j]; const dx=b.x-a.x, dy=b.y-a.y;
+      if(Math.abs(dx)>md||Math.abs(dy)>md) continue;
+      const d=Math.hypot(dx,dy)||.01; if(d>=md) continue;
+      const push=(md-d)*.5, nx=dx/d, ny=dy/d;
+      a.x-=nx*push*.5; a.y-=ny*push*.5; b.x+=nx*push*.5; b.y+=ny*push*.5;
+      a.vx-=nx*push*.08; a.vy-=ny*push*.08; b.vx+=nx*push*.08; b.vy+=ny*push*.08;
+    }
+  }
+}
+// digging: dragging shoves nearby items along and outward
+function dig(px,py,mx,my){
+  const R=120, speed=Math.hypot(mx,my);
+  for(const it of items){
+    const dx=it.x-px, dy=it.y-py, d=Math.hypot(dx,dy);
+    if(d>R) continue;
+    const f=1-d/R, nx=d?dx/d:0, ny=d?dy/d:0;
+    // drag items directly along with the cursor, plus a throw and a sideways shove
+    it.x+=f*mx*.7; it.y+=f*my*.7;
+    it.vx+=f*(mx*.4+nx*speed*.25);
+    it.vy+=f*(my*.4+ny*speed*.25);
+  }
+}
+function draw(){
+  ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,W,H);
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  for(const it of items){
+    ctx.save(); ctx.translate(it.x,it.y);
+    if(it.found){ctx.beginPath();ctx.arc(0,0,SIZE*.55,0,7);ctx.fillStyle='rgba(227,179,65,.3)';ctx.fill();ctx.lineWidth=4;ctx.strokeStyle='#e3b341';ctx.stroke();}
+    ctx.rotate(it.rot); ctx.font=`${SIZE*it.s}px "Segoe UI Emoji","Apple Color Emoji",serif`;
+    ctx.fillText(it.e,0,2); ctx.restore();
+  }
+}
+function loop(){physics(false);draw();requestAnimationFrame(loop);}
+
+const MISS=['Nope.','Not that.','Warmer. Actually, colder.','That is just clutter.','Have you tried looking harder?','Close, but no.'];
+let m=0;
+function click(px,py){
+  for(let i=items.length-1;i>=0;i--){
+    const it=items[i]; if(Math.hypot(it.x-px,it.y-py)>SIZE*.42) continue;
+    if(it.id){ if(found.has(it.id)) return; found.add(it.id); it.found=true;
+      $('list').querySelector(`[data-id="${it.id}"]`).classList.add('done');
+      const need=TARGETS.filter(t=>!t.absent).length;
+      $('toast').textContent = found.size===need ? 'You found everything that exists! (The '+TARGETS.filter(t=>t.absent).map(t=>t.label.replace(/^an? /,'')).join(', ')+' were never there. Sorry.)' : 'Found '+TARGETS.find(t=>t.id===it.id).label+'!';
+    } else $('toast').textContent=MISS[m++%MISS.length];
+    return;
+  }
+}
+let down=false,last=null,moved=0,start=null;
+const pt=e=>{const r=cv.getBoundingClientRect();return [(e.clientX-r.left)*W/r.width,(e.clientY-r.top)*H/r.height];};
+cv.addEventListener('pointerdown',e=>{down=true;moved=0;last=start=pt(e);cv.setPointerCapture(e.pointerId);cv.classList.add('dig');});
+cv.addEventListener('pointermove',e=>{if(!down)return;const p=pt(e);const mx=p[0]-last[0],my=p[1]-last[1];moved+=Math.hypot(mx,my);dig(p[0],p[1],mx,my);last=p;});
+const end=e=>{if(!down)return;down=false;cv.classList.remove('dig');if(moved<8)click(start[0],start[1]);};
+cv.addEventListener('pointerup',end); cv.addEventListener('pointercancel',()=>{down=false;cv.classList.remove('dig');});
+$('reset').onclick=build;
+build(); loop();
+</script>
+</body></html>

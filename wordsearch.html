@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Word Search</title><link rel="stylesheet" href="style.css"></head>
+<body>
+<main>
+  <div class="box" id="picker">
+    <h3>Pick a puzzle theme</h3>
+    <div class="body">
+      <div class="themes">
+        <button class="theme" data-t="music"><span class="big">🎵</span>Music</button>
+        <button class="theme" data-t="film"><span class="big">🎬</span>Film</button>
+        <button class="theme" data-t="nature"><span class="big">🏔️</span>Nature</button>
+        <button class="theme" data-t="sports"><span class="big">🏀</span>Sports</button>
+      </div>
+    </div>
+  </div>
+  <div class="box" id="game" hidden>
+    <h3><span id="title"></span></h3>
+    <div class="body">
+      <p class="muted small" style="text-align:center">Click the first letter, then the last letter of a word. Words can go any direction, even backwards.</p>
+      <div class="words" id="words"></div>
+      <div class="toast" id="toast" style="text-align:center"></div>
+      <div class="ws" id="grid"></div>
+      <p style="text-align:center;margin-top:16px"><button class="btn" id="back">Change theme</button></p>
+    </div>
+  </div>
+</main>
+<script src="common.js"></script>
+<script>
+const N = 10;
+// One fixed puzzle per theme. Film = surnames of women and queer actors (placeholders: edit freely).
+const THEMES = {
+ "music": {
+  "name": "Music",
+  "words": ["POSTROCK","JAZZ","REGGAETON","METAL","DISCO","POPPUNK","YACHTROCK","HIPHOP"],
+  "grid": ["OSMUBBYXMS","RUEPOPPUNK","HGTWGEOBSB","IYACHTROCK","PSLGOCSIDZ","HPBFXFXXZZ","OQKQXNPOFA","PKCORTSOPJ","REGGAETONL","KDPCSXHVRU"]
+ },
+ "film": {
+  "name": "Film",
+  "words": [
+   "STREEP",
+   "YEOH",
+   "BLANCHETT",
+   "DAVIS",
+   "MCKELLEN",
+   "CUMMING",
+   "THERON",
+   "ROBERTS"
+  ],
+  "grid": [
+   "CAITBWMCYP",
+   "ODFTYRSOTH",
+   "IACEETTRHO",
+   "MVUHAOROEE",
+   "GIMCNGEBRY",
+   "FSMNAQEEOR",
+   "VWIAPCPRNI",
+   "GRNLECJTPS",
+   "NMGBOQPSMK",
+   "KNELLEKCMF"
+  ]
+ },
+ "nature": {
+  "name": "Nature",
+  "words": [
+   "CANYON",
+   "MESA",
+   "VALLEY",
+   "PLATEAU",
+   "DELTA",
+   "DUNE",
+   "GLACIER",
+   "FJORD"
+  ],
+  "grid": [
+   "MWEJBYCGNN",
+   "MDASEMKCXF",
+   "FUAETALPPB",
+   "JCANYONPLQ",
+   "OAJDCADJZE",
+   "RVVALLEYPI",
+   "DATLEDMOAU",
+   "SDUNETPOFW",
+   "REICALGNBY",
+   "EBGAAEJHQU"
+  ]
+ },
+ "sports": {
+  "name": "Sports",
+  "words": [
+   "BALL"
+  ],
+  "grid": [
+   "BBBLAAALAL",
+   "LBABBLBLLL",
+   "LAALABAAAL",
+   "AALBAABLAL",
+   "AAALBABALB",
+   "ABABAABALA",
+   "LALLAAAALA",
+   "BBBBBALBAB",
+   "LAABALALLA",
+   "AALAALBBLB"
+  ]
+ }
+};
+const DIRS = [[0,1],[1,0],[1,1],[-1,1],[0,-1],[-1,0],[-1,-1],[1,-1]];
+
+let theme, puzzle, found, first;
+const $ = id => document.getElementById(id);
+const toast = (m) => $('toast').textContent = m;
+
+function start(t){
+  theme=t; puzzle = {grid: THEMES[t].grid.map(r=>r.split('')), words: THEMES[t].words};
+  found=new Set(); first=null;
+  $('picker').hidden=true; $('game').hidden=false;
+  $('title').textContent = THEMES[t].name + ' word search';
+  toast(t==='sports' ? 'Find the word BALL. It appears exactly once. Good luck.' : '');
+  $('grid').classList.remove('win');
+  $('words').innerHTML = puzzle.words.slice().sort().map(w=>`<span data-w="${w}">${w}</span>`).join('');
+  const grid=$('grid'); grid.innerHTML='';
+  for(let r=0;r<N;r++)for(let c=0;c<N;c++){
+    const d=document.createElement('div'); d.className='c'; d.textContent=puzzle.grid[r][c]; d.dataset.r=r; d.dataset.c=c;
+    d.onclick=()=>pick(r,c); grid.appendChild(d);
+  }
+}
+const cell=(r,c)=>$('grid').children[r*N+c];
+function pick(r,c){
+  if(!first){ first=[r,c]; cell(r,c).classList.add('sel'); return; }
+  const [r0,c0]=first; cell(r0,c0).classList.remove('sel'); first=null;
+  const dr=r-r0, dc=c-c0;
+  if(!(dr===0||dc===0||Math.abs(dr)===Math.abs(dc))||(dr===0&&dc===0)){ toast('That is not a straight line. Geometry strikes again.'); return; }
+  const len=Math.max(Math.abs(dr),Math.abs(dc))+1, sr=Math.sign(dr), sc=Math.sign(dc);
+  const cells=[]; let s='';
+  for(let i=0;i<len;i++){const rr=r0+sr*i,cc=c0+sc*i; cells.push([rr,cc]); s+=puzzle.grid[rr][cc];}
+  const rev=[...s].reverse().join('');
+  const w=puzzle.words.find(w=>!found.has(w)&&(w===s||w===rev));
+  if(!w){ toast('Nope.'); return; }
+  found.add(w); cells.forEach(([a,b])=>cell(a,b).classList.add('found'));
+  document.querySelector(`[data-w="${w}"]`).classList.add('done');
+  if(found.size===puzzle.words.length){
+    $('grid').classList.add('win');
+    toast(theme==='sports' ? 'You found the ball. Truly the pinnacle of athletics. 🏆' : 'All words found! You may now return to your responsibilities. 🎉');
+  } else toast('Found ' + w + '!');
+}
+document.querySelectorAll('.theme').forEach(b=>b.onclick=()=>start(b.dataset.t));
+$('back').onclick=()=>{$('game').hidden=true;$('picker').hidden=false;};
+</script>
+</body></html>

@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pac-Prof</title><link rel="stylesheet" href="style.css">
+<style>
+  /* Arkansas-inspired palette: white, black, cardinal red */
+  :root{--cardinal:#9D2235}
+  .gbox{border-color:var(--cardinal)}
+  .gbox h3{border-bottom-color:var(--cardinal)}
+  #pac{border-color:var(--cardinal)}
+  .hud{color:#fff}
+  .hud b{color:#fff}
+  .btn.red{background:var(--cardinal);border-color:#c8344a}.btn.red:hover{background:#b3283e}
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.8);display:flex;align-items:center;justify-content:center;padding:16px;z-index:50}
+  .modal[hidden]{display:none}
+  .card{background:#fff;color:#000;border:4px solid var(--cardinal);border-radius:10px;padding:26px;max-width:420px;text-align:center}
+  .card h2{margin:0 0 8px;font-size:34px;color:var(--cardinal)}
+  .card .btn{display:block;width:100%;margin-top:10px;padding:10px;font-size:15px}
+  .card .btn.plain{background:#fff;color:#000;border-color:#000}.card .btn.plain:hover{background:#eee}
+  .instr li{margin-bottom:4px}
+</style></head>
+<body>
+<main>
+  <div class="box gbox">
+    <h3>Instructions</h3>
+    <div class="body instr">
+      <p style="margin-top:0">You're the instructor, and you want the <b>highest student average</b> possible.</p>
+      <ul>
+        <li>Collect student papers. Better grades are worth more points (A = 4, B = 3, C = 2, D = 1, F = 0).</li>
+        <li>You have <b>one minute</b>.</li>
+        <li>Move with the <b>arrow keys</b> or <b>WASD</b> (or the on-screen buttons). The clock starts on your first move.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="box gbox">
+    <h3>Pac-Prof: the grading never ends</h3>
+    <div class="body">
+      <div class="hud"><span>Time: <b id="time">1:00</b></span><span>Papers collected: <b id="got">0</b></span><span>Class average: <b id="avg">0%</b></span></div>
+      <canvas id="pac"></canvas>
+      <div class="toast" id="toast" style="text-align:center">Move to start the clock.</div>
+      <div class="dpad">
+        <span></span><button class="btn" data-d="up">▲</button><span></span>
+        <button class="btn" data-d="left">◀</button><button class="btn" data-d="down">▼</button><button class="btn" data-d="right">▶</button>
+      </div>
+      <p style="text-align:center"><button class="btn" id="restart">Restart</button></p>
+    </div>
+  </div>
+</main>
+
+<div class="modal" id="modal" hidden>
+  <div class="card">
+    <h2>Womp womp. 📉</h2>
+    <p id="final" style="margin:0 0 6px"></p>
+    <button class="btn red" id="retry">Try again</button>
+    <button class="btn plain" id="ok">I'm ok with a low student average</button>
+  </div>
+</div>
+
+<script src="common.js"></script>
+<script>
+const MAP = [
+"###############",
+"#.............#",
+"#.##.#####.##.#",
+"...............",
+"#.##.#...#.##.#",
+"#....#...#....#",
+"#.##.#####.##.#",
+"#.............#",
+"#.##.#.#.#.##.#",
+"#.............#",
+"###############"];
+const W=MAP[0].length, H=MAP.length, T=44, TIME=60;
+const CARDINAL='#9D2235';
+const cv=document.getElementById('pac'), ctx=cv.getContext('2d');
+cv.width=W*T; cv.height=H*T;
+const $=id=>document.getElementById(id);
+const wall=(x,y)=>{ if(y<0||y>=H) return true; x=(x+W)%W; return MAP[y][x]==='#'; };
+const DV={up:[0,-1],down:[0,1],left:[-1,0],right:[1,0]};
+const ANG={right:0,down:Math.PI/2,left:Math.PI,up:-Math.PI/2};
+const POINTS={A:4,B:3,C:2,D:1,F:0};
+const BAG=['B','B','B','C','C','C','C','D','D','F','F']; // grade mix for loose papers (no A's: those are all on the runners)
+const RUNNERS=[{label:'A',pts:4},{label:'A',pts:4},{label:'A',pts:4},{label:'A',pts:4}];
+const EXCUSES=['"My laptop died."','"Canvas ate it."','"I emailed it. Check spam."','"It was due TODAY?"','"I thought it was optional."','"Extension granted."'];
+
+let dots, pts, got, maxPts, prof, papers, queued, over, started, timeLeft;
+function reset(){
+  dots=new Map(); maxPts=0;
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++) if(MAP[y][x]==='.'){const g=BAG[Math.floor(Math.random()*BAG.length)]; dots.set(x+','+y,g); maxPts+=POINTS[g];}
+  RUNNERS.forEach(r=>maxPts+=r.pts);
+  dots.delete('7,9'); // professor's start tile
+  pts=0; got=0; over=false; started=false; timeLeft=TIME; queued='left';
+  prof={x:7,y:9,tx:7,ty:9,p:1,dir:'left',speed:5};
+  papers=[[1,1],[13,1],[1,7],[13,7]].map(([x,y],i)=>({x,y,tx:x,ty:y,p:1,speed:6.2,label:RUNNERS[i].label,px:-1,py:-1}));
+  $('modal').hidden=true; $('toast').textContent='Move to start the clock.'; upd();
+}
+function upd(){
+  $('got').textContent=got;
+  $('avg').textContent=Math.round(pts/maxPts*100)+'%';
+  const t=Math.max(0,Math.ceil(timeLeft)); $('time').textContent=Math.floor(t/60)+':'+String(t%60).padStart(2,'0');
+}
+function bfs(sx,sy){
+  const d=Array.from({length:H},()=>Array(W).fill(Infinity)); d[sy][sx]=0; const q=[[sx,sy]];
+  while(q.length){const [x,y]=q.shift(); for(const [dx,dy] of Object.values(DV)){const nx=(x+dx+W)%W,ny=y+dy; if(!wall(nx,ny)&&d[ny][nx]===Infinity){d[ny][nx]=d[y][x]+1;q.push([nx,ny]);}}}
+  return d;
+}
+function stepProf(dt){
+  const e=prof;
+  if(e.p>=1){
+    e.x=e.tx;e.y=e.ty;
+    const k=e.x+','+e.y;
+    if(dots.has(k)){const g=dots.get(k);dots.delete(k);pts+=POINTS[g];got++;upd();
+      if(dots.size===0) $('toast').textContent='Every loose paper is in! Now catch the four that are still running...';}
+    const [qx,qy]=DV[queued]; if(!wall(e.x+qx,e.y+qy)) e.dir=queued;
+    const [dx,dy]=DV[e.dir];
+    if(!wall(e.x+dx,e.y+dy)){ e.tx=(e.x+dx+W)%W; e.ty=e.y+dy; e.p=0; }
+    else return;
+  }
+  e.p=Math.min(1,e.p+e.speed*dt);
+}
+function stepPaper(e,dt){
+  if(e.p>=1){
+    e.x=e.tx;e.y=e.ty;
+    const d=bfs(prof.tx,prof.ty), cur=d[e.y][e.x]; let best=null,bv=-1;
+    for(const [dx,dy] of Object.values(DV)){
+      const nx=(e.x+dx+W)%W,ny=e.y+dy; if(wall(e.x+dx,ny)) continue;
+      const dist=d[ny][nx], back=(nx===e.px&&ny===e.py);
+      // Only move if it gets the paper farther away (or no closer without doubling back).
+      // Otherwise it stays put, so papers don't jitter back and forth in corners.
+      if(dist<cur || (dist===cur && back)) continue;
+      const v=dist+Math.random()*0.5; if(v>bv){bv=v;best=[nx,ny];}
+    }
+    if(best){ e.px=e.x;e.py=e.y;e.tx=best[0];e.ty=best[1];e.p=0; }
+    else return;
+  }
+  e.p=Math.min(1,e.p+e.speed*dt);
+}
+function drawPos(e){
+  if(Math.abs(e.tx-e.x)>1) return [e.p<.5? e.x+(e.tx>e.x?-1:1)*e.p : e.tx+(e.tx>e.x?1:-1)*(1-e.p), e.y];
+  return [e.x+(e.tx-e.x)*e.p, e.y+(e.ty-e.y)*e.p];
+}
+function escape(e){
+  // THE RULE: the running papers can never be caught. If the professor gets close, the paper files an excuse and reappears far away.
+  const d=bfs(prof.tx,prof.ty); let best=[e.x,e.y],bv=-1;
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++) if(d[y][x]<Infinity&&d[y][x]>bv){bv=d[y][x];best=[x,y];}
+  e.x=e.tx=best[0]; e.y=e.ty=best[1]; e.p=1; e.px=-1; e.py=-1;
+  $('toast').textContent=EXCUSES[Math.floor(Math.random()*EXCUSES.length)];
+}
+function timeUp(){
+  over=true; womp();
+  $('final').textContent='Time\'s up. Final class average: '+Math.round(pts/maxPts*100)+'%.';
+  $('modal').hidden=false;
+}
+function frame(t){
+  const dt=Math.min(.05,(t-(frame.last||t))/1000); frame.last=t; frame.t=t;
+  if(!over&&started){
+    stepProf(dt); papers.forEach(p=>stepPaper(p,dt));
+    const [px,py]=drawPos(prof);
+    papers.forEach(p=>{const [x,y]=drawPos(p); if(Math.hypot(x-px,y-py)<1.15) escape(p);});
+    timeLeft-=dt; upd();
+    if(timeLeft<=0){timeLeft=0;upd();timeUp();}
+  }
+  draw(); requestAnimationFrame(frame);
+}
+function paperShape(cx,cy,w,h,label,color,size){
+  const x=cx-w/2,y=cy-h/2,f=9;
+  ctx.fillStyle='#fff'; ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(x+w-f,y); ctx.lineTo(x+w,y+f); ctx.lineTo(x+w,y+h); ctx.lineTo(x,y+h); ctx.closePath(); ctx.fill();
+  ctx.fillStyle='#bbb'; ctx.beginPath(); ctx.moveTo(x+w-f,y); ctx.lineTo(x+w-f,y+f); ctx.lineTo(x+w,y+f); ctx.closePath(); ctx.fill();
+  ctx.fillStyle=color; ctx.font='900 '+size+'px Arial,sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(label,cx,cy+3);
+}
+function draw(){
+  ctx.fillStyle='#000';ctx.fillRect(0,0,cv.width,cv.height);
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++) if(MAP[y][x]==='#'){ctx.fillStyle=CARDINAL;ctx.fillRect(x*T+3,y*T+3,T-6,T-6);}
+  dots.forEach((g,k)=>{const [x,y]=k.split(',').map(Number); paperShape(x*T+T/2,y*T+T/2,16,20,g,(g==='D'||g==='F')?CARDINAL:'#000',12);});
+  papers.forEach(p=>{const [x,y]=drawPos(p); const good=true; paperShape(x*T+T/2,y*T+T/2,34,40,p.label,good?'#000':CARDINAL,30);});
+  // professor: instructor emoji (flips to face left)
+  const [x,y]=drawPos(prof), cx=x*T+T/2, cy=y*T+T/2;
+  ctx.save(); ctx.translate(cx,cy); if(prof.dir==='left') ctx.scale(-1,1);
+  ctx.font=(T*.85)+'px "Segoe UI Emoji","Apple Color Emoji",serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillStyle='#fff'; ctx.fillText('🧑‍🏫',0,2); ctx.restore();
+}
+function womp(){
+  try{
+    const ac=new (window.AudioContext||window.webkitAudioContext)();
+    [[311,0,.4],[293,.45,.4],[277,.9,.4],[233,1.35,1.1]].forEach(([f,at,len])=>{
+      const o=ac.createOscillator(), g=ac.createGain(); o.type='sawtooth'; o.frequency.value=f;
+      if(at>1) o.frequency.linearRampToValueAtTime(f*.85,ac.currentTime+at+len);
+      g.gain.setValueAtTime(.0001,ac.currentTime+at); g.gain.exponentialRampToValueAtTime(.18,ac.currentTime+at+.05); g.gain.exponentialRampToValueAtTime(.0001,ac.currentTime+at+len);
+      o.connect(g).connect(ac.destination); o.start(ac.currentTime+at); o.stop(ac.currentTime+at+len+.05);
+    });
+  }catch(e){}
+}
+const KEYS={ArrowUp:'up',ArrowDown:'down',ArrowLeft:'left',ArrowRight:'right',w:'up',s:'down',a:'left',d:'right'};
+function input(d){ if(over) return; queued=d; if(!started){started=true;$('toast').textContent='Go!';} }
+addEventListener('keydown',e=>{const d=KEYS[e.key]; if(d){input(d);e.preventDefault();}});
+document.querySelectorAll('.dpad button').forEach(b=>b.onclick=()=>input(b.dataset.d));
+$('restart').onclick=reset; $('retry').onclick=reset; $('ok').onclick=()=>{location.href='index.html';};
+reset(); requestAnimationFrame(frame);
+</script>
+</body></html>
